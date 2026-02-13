@@ -34,6 +34,8 @@ from pydantic import BaseModel, Field
 from browser_use import Agent, ActionResult, Tools
 from browser_use.browser import BrowserProfile, BrowserSession
 from browser_use.llm import ChatOpenAI, ChatAnthropic
+# Google LLM 支持
+from browser_use.llm.google.chat import ChatGoogle
 from browser_use.llm.base import BaseChatModel
 from browser_use.llm.messages import SystemMessage, UserMessage
 
@@ -253,20 +255,27 @@ def create_solver_tool(tools: Tools, solver_llm: BaseChatModel) -> None:
 # ============================================================
 def validate_environment() -> None:
     """检查必要的环境变量是否已配置。"""
-    provider = os.getenv('MODEL_PROVIDER', 'openai').lower()
-
-    if provider == 'openai':
-        if not os.getenv('OPENAI_API_KEY'):
-            print('❌ 错误：未设置 OPENAI_API_KEY 环境变量。')
-            print('   请在 .env 文件中设置 OPENAI_API_KEY=your-api-key-here')
-            sys.exit(1)
-    elif provider == 'anthropic':
-        if not os.getenv('ANTHROPIC_API_KEY'):
-            print('❌ 错误：未设置 ANTHROPIC_API_KEY 环境变量。')
-            print('   请在 .env 文件中设置 ANTHROPIC_API_KEY=your-api-key-here')
-            sys.exit(1)
-    else:
-        print(f'❌ 错误：不支持的 MODEL_PROVIDER "{provider}"，请使用 "openai" 或 "anthropic"。')
+    default_provider = os.getenv('DEFAULT_PROVIDER', 'openai').lower()
+    browser_provider = os.getenv('BROWSER_PROVIDER', default_provider).lower()
+    solver_provider = os.getenv('SOLVER_PROVIDER', default_provider).lower()
+    
+    active_providers = {browser_provider, solver_provider}
+    
+    missing_keys = []
+    
+    if 'openai' in active_providers and not os.getenv('OPENAI_API_KEY'):
+        missing_keys.append('OPENAI_API_KEY')
+    
+    if 'anthropic' in active_providers and not os.getenv('ANTHROPIC_API_KEY'):
+        missing_keys.append('ANTHROPIC_API_KEY')
+        
+    if 'google' in active_providers and not os.getenv('GOOGLE_API_KEY'):
+        missing_keys.append('GOOGLE_API_KEY')
+        
+    if missing_keys:
+        print('❌ 错误：缺少环境变量：')
+        for key in missing_keys:
+            print(f'   - {key}')
         sys.exit(1)
 
 
@@ -292,33 +301,43 @@ def _create_anthropic_llm(model: str | None = None) -> ChatAnthropic:
     return ChatAnthropic(model=model)
 
 
+def _create_google_llm(model: str | None = None) -> ChatGoogle:
+    """创建 Google LLM 实例。"""
+    model = model or os.getenv('GOOGLE_MODEL', 'gemini-2.0-flash')
+    return ChatGoogle(model=model)
+
+
 def create_llms() -> tuple[BaseChatModel, BaseChatModel]:
-    """创建 Browser Agent LLM 和 Solver LLM。
+    """创建 Browser Agent LLM 和 Solver LLM。"""
+    default_provider = os.getenv('DEFAULT_PROVIDER', 'openai').lower()
+    
+    b_provider = os.getenv('BROWSER_PROVIDER', default_provider).lower()
+    b_model = os.getenv('BROWSER_MODEL', None)
+    
+    s_provider = os.getenv('SOLVER_PROVIDER', default_provider).lower()
+    s_model = os.getenv('SOLVER_MODEL', None)
+    
+    def get_llm(provider: str, model: str | None, **kwargs) -> BaseChatModel:
+        if provider == 'openai':
+            # 只有 OpenAI 支持 max_completion_tokens 参数
+            return _create_openai_llm(model=model, **kwargs)
+        elif provider == 'anthropic':
+            return _create_anthropic_llm(model=model)
+        elif provider == 'google':
+            return _create_google_llm(model=model)
+        else:
+            raise ValueError(f'不支持的 Provider: {provider}')
 
-    支持通过环境变量为两个角色配置不同模型：
-    - BROWSER_MODEL：浏览器操作模型（默认使用 OPENAI_MODEL）
-    - SOLVER_MODEL：解题推理模型（默认使用 OPENAI_MODEL）
-    """
-    provider = os.getenv('MODEL_PROVIDER', 'openai').lower()
-
-    browser_model = os.getenv('BROWSER_MODEL', None)
-    solver_model = os.getenv('SOLVER_MODEL', None)
-
-    if provider == 'openai':
-        browser_llm = _create_openai_llm(model=browser_model)
-        solver_llm = _create_openai_llm(model=solver_model, max_completion_tokens=16384)
-        print(f'🤖 Browser Agent 模型：OpenAI {browser_llm.model}')
-        print(f'🧠 Solver Agent 模型：OpenAI {solver_llm.model}')
-        base_url = os.getenv('OPENAI_BASE_URL', None)
-        if base_url:
-            print(f'   API 地址：{base_url}')
-    elif provider == 'anthropic':
-        browser_llm = _create_anthropic_llm(model=browser_model)
-        solver_llm = _create_anthropic_llm(model=solver_model)
-        print(f'🤖 Browser Agent 模型：Anthropic {browser_llm.model}')
-        print(f'🧠 Solver Agent 模型：Anthropic {solver_llm.model}')
-    else:
-        raise ValueError(f'不支持的 MODEL_PROVIDER: {provider}')
+    print(f'🤖 Browser Agent: {b_provider.upper()} (Model: {b_model or "Default"})')
+    browser_llm = get_llm(b_provider, b_model)
+    
+    print(f'🧠 Solver Agent: {s_provider.upper()} (Model: {s_model or "Default"})')
+    # 仅针对 OpenAI 传递 max_completion_tokens，Google/Anthropic 忽略此参数
+    solver_kwargs = {}
+    if s_provider == 'openai':
+        solver_kwargs['max_completion_tokens'] = 16384
+        
+    solver_llm = get_llm(s_provider, s_model, **solver_kwargs)
 
     return browser_llm, solver_llm
 
