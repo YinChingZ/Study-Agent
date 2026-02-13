@@ -12,7 +12,7 @@
 - **思维链输出**：Solver Agent 展示完整的推理过程
 - **操作可视化**：Demo 模式高亮 Agent 正在操作的元素
 
-## 📋 前置要求
+## � 前置要求
 
 - Python 3.11+
 - Chrome 浏览器（或 Chromium 内核浏览器）
@@ -30,33 +30,35 @@ playwright install chromium
 
 ### 2. 配置 API Key
 
-编辑 `.env` 文件，填写你的 API Key：
+编辑 `.env` 文件，推荐使用以下配置结构（支持 OpenAI, Anthropic, Google）：
 
 ```env
-MODEL_PROVIDER=openai
-OPENAI_API_KEY=sk-your-api-key-here
+# 全局默认提供商 (openai / anthropic / google)
+DEFAULT_PROVIDER=openai
+
+# OpenAI 配置
+OPENAI_API_KEY=sk-your-key-here
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL=gpt-4o
+
+# Google 配置
+GOOGLE_API_KEY=your-gemini-key
+# GOOGLE_MODEL=gemini-2.0-flash
+
+# Anthropic 配置
+ANTHROPIC_API_KEY=sk-ant-key
 ```
 
-如果使用兼容 OpenAI API 的第三方服务，可同时设置：
+**双 Agent 独立模型配置**（可选，可混合使用不同厂商的模型）：
 
 ```env
-OPENAI_BASE_URL=https://your-api-provider.com/v1
-OPENAI_MODEL=your-model-name
-```
-
-**双 Agent 独立模型配置**（可选，不设置则两者均使用 OPENAI_MODEL）：
-
-```env
-# 轻量模型负责浏览器操作，强模型负责解题
+# 浏览器操作使用 OpenAI
+BROWSER_PROVIDER=openai
 BROWSER_MODEL=gpt-4o-mini
-SOLVER_MODEL=gpt-4o
-```
 
-如使用 Anthropic：
-
-```env
-MODEL_PROVIDER=anthropic
-ANTHROPIC_API_KEY=sk-ant-your-api-key-here
+# 解题推理使用 Google Gemini
+SOLVER_PROVIDER=google
+SOLVER_MODEL=gemini-2.0-flash
 ```
 
 ### 3. 启动 Chrome Debug 模式
@@ -103,14 +105,18 @@ Agent 会自动：
 
 | 环境变量 | 默认值 | 说明 |
 |---------|--------|------|
-| `MODEL_PROVIDER` | `openai` | 模型提供商：`openai` 或 `anthropic` |
+| `DEFAULT_PROVIDER` | `openai` | 默认模型提供商：`openai`, `anthropic`, `google` |
+| `BROWSER_PROVIDER` | — | Browser Agent 提供商 (覆盖默认值) |
+| `SOLVER_PROVIDER` | — | Solver Agent 提供商 (覆盖默认值) |
 | `OPENAI_API_KEY` | — | OpenAI API Key |
-| `OPENAI_BASE_URL` | — | OpenAI API 地址（用于兼容第三方服务） |
+| `OPENAI_BASE_URL` | — | OpenAI API 地址 |
 | `OPENAI_MODEL` | `gpt-4o` | OpenAI 默认模型名称 |
-| `BROWSER_MODEL` | — | Browser Agent 模型（不设置则用 OPENAI_MODEL） |
-| `SOLVER_MODEL` | — | Solver Agent 模型（不设置则用 OPENAI_MODEL） |
+| `GOOGLE_API_KEY` | — | Google (Gemini) API Key |
+| `GOOGLE_MODEL` | `gemini-2.0-flash` | Google 默认模型名称 |
 | `ANTHROPIC_API_KEY` | — | Anthropic API Key |
-| `ANTHROPIC_MODEL` | `claude-sonnet-4-20250514` | Anthropic 模型名称 |
+| `ANTHROPIC_MODEL` | `claude-3-5-sonnet` | Anthropic 模型名称 |
+| `BROWSER_MODEL` | — | 指定 Browser Agent 使用的模型名称 |
+| `SOLVER_MODEL` | — | 指定 Solver Agent 使用的模型名称 |
 | `CDP_URL` | `http://localhost:9222` | Chrome DevTools Protocol 地址 |
 | `BROWSER_USE_LOGGING_LEVEL` | `info` | 日志级别：`debug` / `info` / `warning` |
 
