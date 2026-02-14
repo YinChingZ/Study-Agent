@@ -18,12 +18,32 @@
 - **自动提交**：所有题目完成后自动点击提交
 - **思维链输出**：Solver Agent 展示完整的推理过程
 - **操作可视化**：Demo 模式高亮 Agent 正在操作的元素
+- **模块化架构**：清晰的包结构，支持编程调用与自定义扩展
 
-## � 前置要求
+## 📁 项目结构
+
+```
+Study-Agent/
+├── main.py                    # 入口文件（薄封装）
+├── study_agent/               # 核心包
+│   ├── __init__.py            # 公开 API 导出
+│   ├── config.py              # 配置数据类 & 环境变量加载
+│   ├── prompts.py             # 所有提示词模板
+│   ├── llm_factory.py         # LLM 工厂（OpenAI / Anthropic / Google）
+│   ├── browser.py             # BrowserSession 创建与管理
+│   ├── app.py                 # StudyAgentApp — 主编排器
+│   └── tools/
+│       ├── __init__.py
+│       └── solver.py          # solve_question 工具 & 答案解析
+├── requirements.txt
+└── .env                       # API Key 与配置
+```
+
+## 📋 前置要求
 
 - Python 3.11+
 - Chrome 浏览器（或 Chromium 内核浏览器）
-- OpenAI API Key 或 Anthropic API Key
+- OpenAI、Anthropic 或 Google API Key
 
 ## 🚀 快速开始
 
@@ -167,6 +187,39 @@ Agent 会自动：
 | 推理深度 | thinking 字段兼顾页面分析+解题 | Solver 全部认知预算用于解题 |
 | 模型灵活性 | 只能用一个模型 | 轻量模型导航 + 强模型解题 |
 | 答案质量 | 操作和推理相互干扰 | 各司其职，质量更高 |
+
+## 🔌 编程接口
+
+StudyAgent 支持作为库在你的代码中调用：
+
+```python
+import asyncio
+from study_agent import StudyAgentApp, load_config
+
+async def main():
+    # 从环境变量加载配置
+    cfg = load_config()
+
+    # 自定义设置
+    cfg.agent.max_steps = 50
+    cfg.agent.demo_mode = False
+
+    # 创建并运行
+    app = StudyAgentApp(config=cfg)
+    await app.run(task="只做选择题")
+
+asyncio.run(main())
+```
+
+**核心类：**
+
+| 类名 | 说明 |
+|------|------|
+| `StudyAgentApp` | 主应用类，编排完整的做题流程 |
+| `AppConfig` | 顶层配置，聚合所有子配置 |
+| `LLMConfig` | LLM 提供商/模型/接口地址配置 |
+| `BrowserConfig` | CDP 连接参数 |
+| `AgentConfig` | Agent 运行时参数（max_steps、vision 等） |
 
 ## ❓ 常见问题
 

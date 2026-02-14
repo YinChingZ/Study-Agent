@@ -17,6 +17,26 @@ A general-purpose automated question-answering agent built on [browser-use](http
 - **Auto Submission**: Automatically clicks submit after all questions are completed.
 - **Chain of Thought**: The Solver Agent displays the complete reasoning process.
 - **Visualized Operations**: Demo mode highlights the elements the Agent is interacting with.
+- **Modular Architecture**: Clean package structure, supports programmatic invocation and custom extensions.
+
+## 📁 Project Structure
+
+```
+Study-Agent/
+├── main.py                    # Entry point (thin wrapper)
+├── study_agent/               # Core package
+│   ├── __init__.py            # Public API exports
+│   ├── config.py              # Configuration dataclasses & env loading
+│   ├── prompts.py             # All prompt templates
+│   ├── llm_factory.py         # LLM factory (OpenAI / Anthropic / Google)
+│   ├── browser.py             # BrowserSession creation & management
+│   ├── app.py                 # StudyAgentApp — main orchestrator
+│   └── tools/
+│       ├── __init__.py
+│       └── solver.py          # solve_question tool & answer parsing
+├── requirements.txt
+└── .env                       # API keys & configuration
+```
 
 ##  Prerequisites
 
@@ -166,6 +186,39 @@ The Agent will automatically:
 | **Reasoning Depth** | Thinking budget split between UI analysis & solving. | Solver uses full cognitive budget for reasoning. |
 | **Model Flexibility** | Locked to a single model. | Lightweight model for navigation + Powerful model for solving. |
 | **Answer Quality** | Operations and reasoning interfere with each other. | Clear separation of duties leads to higher quality. |
+
+## 🔌 Programmatic API
+
+StudyAgent can be used as a library in your own code:
+
+```python
+import asyncio
+from study_agent import StudyAgentApp, load_config
+
+async def main():
+    # Load config from environment variables
+    cfg = load_config()
+
+    # Customize settings
+    cfg.agent.max_steps = 50
+    cfg.agent.demo_mode = False
+
+    # Create and run
+    app = StudyAgentApp(config=cfg)
+    await app.run(task="Answer only the multiple choice questions")
+
+asyncio.run(main())
+```
+
+**Key classes:**
+
+| Class | Description |
+|-------|-------------|
+| `StudyAgentApp` | Main application class, orchestrates the full workflow |
+| `AppConfig` | Top-level config aggregating all sub-configs |
+| `LLMConfig` | LLM provider/model/base_url configuration |
+| `BrowserConfig` | CDP connection parameters |
+| `AgentConfig` | Agent runtime parameters (max_steps, vision, etc.) |
 
 ## ❓ FAQ
 
