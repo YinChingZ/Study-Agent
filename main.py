@@ -17,6 +17,7 @@ StudyAgent — 基于 browser-use 的自动做题 Agent（双 Agent 架构）
 """
 
 import asyncio
+import base64
 import logging
 import os
 import sys
@@ -37,7 +38,13 @@ from browser_use.llm import ChatOpenAI, ChatAnthropic
 # Google LLM 支持
 from browser_use.llm.google.chat import ChatGoogle
 from browser_use.llm.base import BaseChatModel
-from browser_use.llm.messages import SystemMessage, UserMessage
+from browser_use.llm.messages import (
+    ContentPartImageParam,
+    ContentPartTextParam,
+    ImageURL,
+    SystemMessage,
+    UserMessage,
+)
 
 logger = logging.getLogger('study_agent')
 
@@ -47,6 +54,11 @@ logger = logging.getLogger('study_agent')
 SOLVER_SYSTEM_PROMPT = """你是一个学业非常优秀的学生，擅长各个学科，包括但不限于数学、物理、化学、生物、英语、历史、地理、政治、计算机科学等。
 
 你的唯一任务是：根据给出的题目内容，给出正确答案。
+
+## 关于图片
+- 如果消息中附带了页面截图，请结合截图中的视觉信息（图表、几何图形、函数图像、化学结构式、表格数据等）进行解题
+- 文字描述和截图可能互补，请综合两者信息
+- 如果截图中的文字与题目文字有出入，以截图中实际显示的内容为准
 
 ## 答题规则
 
@@ -127,6 +139,12 @@ BROWSER_AGENT_PROMPT = """
 - 如果找到"提交"/"Submit"/"交卷"按钮，先检查是否所有题目已作答完毕，然后点击提交
 - 如果页面有进度条或题目编号，利用它们判断是否还有未完成的题目
 
+### 图片题目处理（重要）
+- 如果题目中包含**图片、图表、几何图形、函数图像、化学结构式、电路图、地图**等视觉元素，调用 solve_question 时必须设置 `include_screenshot=true`
+- 如果题目是纯文字（没有视觉元素），保持 `include_screenshot=false` 以节省资源
+- 当设置 `include_screenshot=true` 时，当前页面截图会自动发送给解题模型
+- 即使设置了 `include_screenshot=true`，仍然要在 question 参数中尽量描述题目文字内容，因为截图和文字描述互补
+
 ### 重要注意事项
 - **必须使用 solve_question 工具获取答案**，不要自己猜测答案
 - 每次操作后等待页面加载完毕再进行下一步
@@ -167,6 +185,12 @@ class SolveQuestionParams(BaseModel):
                     '例如："round to the nearest hundredth"、"enter an exact value"、"as a fraction"、"to 2 decimal places"。'
                     '如果没有特殊格式要求，留空即可。'
     )
+    include_screenshot: bool = Field(
+        default=False,
+        description='是否将当前页面截图一并发送给解题模型。'
+                    '当题目包含图片、图表、几何图形、函数图像、化学结构式、电路图等视觉元素时设为 true。'
+                    '纯文字题目保持 false 以节省资源。'
+    )
 
 
 def create_solver_tool(tools: Tools, solver_llm: BaseChatModel) -> None:
@@ -175,14 +199,25 @@ def create_solver_tool(tools: Tools, solver_llm: BaseChatModel) -> None:
     @tools.action(
         'Solve a question: send the complete question text to the solver AI and get the answer. '
         'You MUST use this tool for every question before filling in answers on the page. '
-        'Include the full question text with all options.',
+        'Include the full question text with all options. '
+        'Set include_screenshot=true when the question contains images, charts, graphs, geometric figures, or other visual elements.',
         param_model=SolveQuestionParams,
     )
-    async def solve_question(params: SolveQuestionParams) -> ActionResult:
-        """调用 Solver LLM 解答题目，返回推理过程和答案。"""
+    async def solve_question(params: SolveQuestionParams, browser_session: BrowserSession) -> ActionResult:
+        """调用 Solver LLM 解答题目，返回推理过程和答案。支持多模态（文本+截图）。"""
         logger.info(f'🧠 Solver 收到题目：{params.question[:80]}...')
 
-        # 构建 Solver 的消息（纯文本推理，无浏览器上下文）
+        # ---- 按需截图 ----
+        screenshot_b64: str | None = None
+        if params.include_screenshot:
+            try:
+                screenshot_bytes = await browser_session.take_screenshot(full_page=False)
+                screenshot_b64 = base64.b64encode(screenshot_bytes).decode('utf-8')
+                logger.info(f'📸 已捕获页面截图（{len(screenshot_bytes)} bytes），将发送给 Solver')
+            except Exception as e:
+                logger.warning(f'⚠️ 截图失败，将仅使用文本解题：{e}')
+
+        # ---- 构建题目提示文本 ----
         type_hint = ''
         if params.question_type != 'auto':
             type_map = {
@@ -200,11 +235,30 @@ def create_solver_tool(tools: Tools, solver_llm: BaseChatModel) -> None:
         elif params.question_type == 'fill':
             format_hint = '\n\n答案格式要求：请优先使用小数形式（保留两位小数），不要使用 LaTeX 或特殊符号。'
 
-        user_content = f'请解答以下题目：\n\n{params.question}{type_hint}{format_hint}'
+        user_text = f'请解答以下题目：\n\n{params.question}{type_hint}{format_hint}'
+
+        # ---- 构建消息（支持多模态） ----
+        if screenshot_b64:
+            # 多模态消息：文本 + 截图
+            user_message = UserMessage(content=[
+                ContentPartTextParam(text=user_text),
+                ContentPartTextParam(text='\n以下是题目所在页面的截图，请结合截图中的视觉信息（图表、图形、公式等）进行解题：'),
+                ContentPartImageParam(
+                    image_url=ImageURL(
+                        url=f'data:image/png;base64,{screenshot_b64}',
+                        media_type='image/png',
+                        detail='high',
+                    )
+                ),
+            ])
+            logger.info('🖼️ 使用多模态消息（文本+截图）调用 Solver')
+        else:
+            # 纯文本消息
+            user_message = UserMessage(content=user_text)
 
         messages = [
             SystemMessage(content=SOLVER_SYSTEM_PROMPT),
-            UserMessage(content=user_content),
+            user_message,
         ]
 
         # 调用独立的 Solver LLM（返回 ChatInvokeCompletion，答案在 .completion 中）
@@ -284,7 +338,11 @@ def _create_openai_llm(
     base_url: str | None = None,
     max_completion_tokens: int | None = None,
 ) -> ChatOpenAI:
-    """创建 OpenAI LLM 实例。"""
+    """创建 OpenAI LLM 实例。
+    
+    当环境变量 OPENAI_NO_STRUCTURED_OUTPUT=true 时，禁用 json_schema 结构化输出，
+    改为将 schema 注入系统提示词。适用于不支持 response_format: json_schema 的第三方 API。
+    """
     model = model or os.getenv('OPENAI_MODEL', 'gpt-4o')
     base_url = base_url or os.getenv('OPENAI_BASE_URL', None)
     kwargs = {'model': model}
@@ -292,6 +350,14 @@ def _create_openai_llm(
         kwargs['base_url'] = base_url
     if max_completion_tokens is not None:
         kwargs['max_completion_tokens'] = max_completion_tokens
+    
+    # 兼容不支持 json_schema 结构化输出的第三方 API
+    no_structured = os.getenv('OPENAI_NO_STRUCTURED_OUTPUT', 'false').lower() in ('true', '1', 'yes')
+    if no_structured:
+        kwargs['dont_force_structured_output'] = True
+        kwargs['add_schema_to_system_prompt'] = True
+        logger.info('⚙️ 已禁用 json_schema 结构化输出，改为 schema-in-prompt 模式')
+    
     return ChatOpenAI(**kwargs)
 
 
@@ -313,14 +379,17 @@ def create_llms() -> tuple[BaseChatModel, BaseChatModel]:
     
     b_provider = os.getenv('BROWSER_PROVIDER', default_provider).lower()
     b_model = os.getenv('BROWSER_MODEL', None)
+    b_base_url = os.getenv('BROWSER_BASE_URL', None)
     
     s_provider = os.getenv('SOLVER_PROVIDER', default_provider).lower()
     s_model = os.getenv('SOLVER_MODEL', None)
+    s_base_url = os.getenv('SOLVER_BASE_URL', None)
     
-    def get_llm(provider: str, model: str | None, **kwargs) -> BaseChatModel:
+    def get_llm(provider: str, model: str | None, base_url: str | None = None, **kwargs) -> BaseChatModel:
         if provider == 'openai':
             # 只有 OpenAI 支持 max_completion_tokens 参数
-            return _create_openai_llm(model=model, **kwargs)
+            # 如果配置了特定的 base_url 则使用，否则使用 _create_openai_llm 内部的默认逻辑（全局配置）
+            return _create_openai_llm(model=model, base_url=base_url, **kwargs)
         elif provider == 'anthropic':
             return _create_anthropic_llm(model=model)
         elif provider == 'google':
@@ -329,15 +398,20 @@ def create_llms() -> tuple[BaseChatModel, BaseChatModel]:
             raise ValueError(f'不支持的 Provider: {provider}')
 
     print(f'🤖 Browser Agent: {b_provider.upper()} (Model: {b_model or "Default"})')
-    browser_llm = get_llm(b_provider, b_model)
+    if b_base_url:
+        print(f'   API Base: {b_base_url}')
+    browser_llm = get_llm(b_provider, b_model, base_url=b_base_url)
     
     print(f'🧠 Solver Agent: {s_provider.upper()} (Model: {s_model or "Default"})')
+    if s_base_url:
+        print(f'   API Base: {s_base_url}')
+
     # 仅针对 OpenAI 传递 max_completion_tokens，Google/Anthropic 忽略此参数
     solver_kwargs = {}
     if s_provider == 'openai':
         solver_kwargs['max_completion_tokens'] = 16384
         
-    solver_llm = get_llm(s_provider, s_model, **solver_kwargs)
+    solver_llm = get_llm(s_provider, s_model, base_url=s_base_url, **solver_kwargs)
 
     return browser_llm, solver_llm
 
