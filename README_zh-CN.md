@@ -20,18 +20,57 @@
 - **操作可视化**：Demo 模式高亮 Agent 正在操作的元素
 - **模块化架构**：清晰的包结构，支持编程调用与自定义扩展
 
+## 🆕 本次会话新增内容（Web UI）
+
+- 新增 **FastAPI Web UI 模式**：控制台、设置页、回顾页、WebSocket 实时推送。
+- 新增 **YAML 优先配置**（`config.yaml`），并保留 `.env` 回退兼容。
+- 新增 **Chrome 自动启动与 CDP 有效性探测**，启动报错更明确。
+- 新增 **SQLite 做题历史存储**（`sessions` + `questions`）。
+- 新增 **登录等待流程**：输入 URL 后先打开页面并暂停，手动登录后点击“恢复”再执行。
+- 新增 **控制台状态持久化**：切到设置/回顾页面再回来不会丢失核心信息。
+- 设置页升级为 **Browser Agent / Solver Agent 分开配置**，并修复“保存其他配置导致 API Key 被清空”问题。
+
+## 🧭 运行模式
+
+### CLI 模式（保持原行为）
+
+```bash
+python main.py
+```
+
+### Web UI 模式
+
+```bash
+python main.py --web
+# 可选
+python main.py --web --host 127.0.0.1 --port 7860
+```
+
+浏览器访问 `http://127.0.0.1:7860`。
+
 ## 📁 项目结构
 
 ```
 Study-Agent/
-├── main.py                    # 入口文件（薄封装）
+├── main.py                    # 入口（CLI / Web）
+├── config.example.yaml        # 演示配置模板
 ├── study_agent/               # 核心包
 │   ├── __init__.py            # 公开 API 导出
 │   ├── config.py              # 配置数据类 & 环境变量加载
 │   ├── prompts.py             # 所有提示词模板
 │   ├── llm_factory.py         # LLM 工厂（OpenAI / Anthropic / Google）
 │   ├── browser.py             # BrowserSession 创建与管理
+│   ├── event_bus.py           # 运行时事件总线
+│   ├── chrome_manager.py      # Chrome 检测/启动/CDP 探测
 │   ├── app.py                 # StudyAgentApp — 主编排器
+│   ├── store/
+│   │   └── history.py         # SQLite 历史存储
+│   ├── web/
+│   │   ├── server.py          # FastAPI 入口
+│   │   ├── api/               # 配置/任务/回顾 API
+│   │   ├── ws/                # WebSocket 事件推送
+│   │   ├── templates/         # Jinja2 页面
+│   │   └── static/            # CSS/JS
 │   └── tools/
 │       ├── __init__.py
 │       └── solver.py          # solve_question 工具 & 答案解析
@@ -87,6 +126,14 @@ BROWSER_MODEL=gpt-4o-mini
 SOLVER_PROVIDER=google
 SOLVER_MODEL=gemini-2.0-flash
 ```
+
+Web UI 也可使用 YAML 配置：
+
+```bash
+cp config.example.yaml config.yaml
+```
+
+`config.yaml` 已加入忽略，不会提交到仓库；请使用 `config.example.yaml` 分享示例。
 
 ### 3. 启动 Chrome Debug 模式
 

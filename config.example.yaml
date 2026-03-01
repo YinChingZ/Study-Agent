@@ -1,0 +1,39 @@
+# StudyAgent 演示配置（可复制为 config.yaml 使用）
+# cp config.example.yaml config.yaml
+
+api_keys:
+  OPENAI_API_KEY: ""
+  ANTHROPIC_API_KEY: ""
+  GOOGLE_API_KEY: ""
+
+browser_llm:
+  provider: openai
+  model: gpt-4o-mini
+  base_url: ""
+  max_completion_tokens: null
+
+solver_llm:
+  provider: openai
+  model: gpt-4o
+  base_url: ""
+  max_completion_tokens: 16384
+
+browser:
+  cdp_url: "http://localhost:9222"
+  auto_launch_chrome: true
+  cdp_port: 9222
+  minimum_wait_page_load_time: 0.5
+  wait_for_network_idle_page_load_time: 1.0
+  wait_between_actions: 0.3
+
+agent:
+  use_vision: true
+  use_thinking: true
+  max_actions_per_step: 3
+  max_failures: 5
+  max_steps: 200
+  enable_planning: true
+  use_judge: true
+  demo_mode: true
+
+task_description: ""

@@ -6,6 +6,8 @@ StudyAgent Solver Tool
 
 import base64
 import logging
+from datetime import datetime
+from typing import Callable
 
 from pydantic import BaseModel, Field
 
@@ -21,6 +23,8 @@ from browser_use.llm.messages import (
 )
 
 from study_agent.prompts import SOLVER_SYSTEM_PROMPT
+from study_agent.event_bus import EventBus, EventType
+from study_agent.store.history import HistoryStore
 
 logger = logging.getLogger("study_agent")
 
@@ -92,7 +96,13 @@ def truncate_reasoning(reasoning: str, question_type: str) -> str:
 # ============================================================
 # 注册 solve_question 工具
 # ============================================================
-def register_solver_tool(tools: Tools, solver_llm: BaseChatModel) -> None:
+def register_solver_tool(
+    tools: Tools,
+    solver_llm: BaseChatModel,
+    event_bus: EventBus | None = None,
+    history_store: HistoryStore | None = None,
+    session_id_getter: Callable[[], int | None] | None = None,
+) -> None:
     """向 Tools 实例注册 solve_question 自定义工具。"""
 
     @tools.action(
@@ -105,6 +115,14 @@ def register_solver_tool(tools: Tools, solver_llm: BaseChatModel) -> None:
     async def solve_question(params: SolveQuestionParams, browser_session: BrowserSession) -> ActionResult:
         """调用 Solver LLM 解答题目，返回推理过程和答案。支持多模态（文本+截图）。"""
         logger.info(f"🧠 Solver 收到题目：{params.question[:80]}...")
+        if event_bus:
+            await event_bus.emit(
+                EventType.QUESTION_FOUND,
+                {
+                    "question": params.question[:200],
+                    "type": params.question_type,
+                },
+            )
 
         # ---- 按需截图 ----
         screenshot_b64: str | None = None
@@ -113,6 +131,8 @@ def register_solver_tool(tools: Tools, solver_llm: BaseChatModel) -> None:
                 screenshot_bytes = await browser_session.take_screenshot(full_page=False)
                 screenshot_b64 = base64.b64encode(screenshot_bytes).decode("utf-8")
                 logger.info(f"📸 已捕获页面截图（{len(screenshot_bytes)} bytes），将发送给 Solver")
+                if event_bus:
+                    await event_bus.emit(EventType.SCREENSHOT, {"image": screenshot_b64})
             except Exception as e:
                 logger.warning(f"⚠️ 截图失败，将仅使用文本解题：{e}")
 
@@ -157,6 +177,9 @@ def register_solver_tool(tools: Tools, solver_llm: BaseChatModel) -> None:
             user_message,
         ]
 
+        if event_bus:
+            await event_bus.emit(EventType.SOLVER_CALLING, {})
+
         # 调用独立的 Solver LLM
         response = await solver_llm.ainvoke(messages)
         answer_text = response.completion if isinstance(response.completion, str) else str(response.completion)
@@ -174,6 +197,28 @@ def register_solver_tool(tools: Tools, solver_llm: BaseChatModel) -> None:
         result_content = f"ANSWER: {answer_part}"
         if truncated_reasoning:
             result_content += f"\n\nREASONING: {truncated_reasoning}"
+
+        if event_bus:
+            await event_bus.emit(
+                EventType.SOLVER_ANSWERED,
+                {
+                    "answer": answer_part,
+                    "reasoning": truncated_reasoning,
+                },
+            )
+
+        if history_store and session_id_getter:
+            session_id = session_id_getter()
+            if session_id is not None:
+                await history_store.add_question(
+                    session_id=session_id,
+                    question_text=params.question,
+                    question_type=params.question_type,
+                    answer=answer_part,
+                    reasoning=reasoning_part,
+                    screenshot_b64=screenshot_b64,
+                    created_at=datetime.now().isoformat(),
+                )
 
         return ActionResult(
             extracted_content=f"题目答案：\n{result_content}",

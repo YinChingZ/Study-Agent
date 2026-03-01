@@ -7,16 +7,17 @@ StudyAgent 应用编排模块
 
 import asyncio
 import logging
-import os
-import sys
+from datetime import datetime
 
 from browser_use import Agent, Tools
 
-from study_agent.config import AppConfig, load_config, validate_config
+from study_agent.config import AppConfig, load_config_from_yaml, validate_config
 from study_agent.prompts import BROWSER_AGENT_PROMPT, DEFAULT_TASK_DESCRIPTION
 from study_agent.llm_factory import create_llm_pair
 from study_agent.browser import create_browser_session
 from study_agent.tools.solver import register_solver_tool
+from study_agent.event_bus import EventBus, EventType
+from study_agent.store.history import HistoryStore
 
 logger = logging.getLogger("study_agent")
 
@@ -36,9 +37,20 @@ class StudyAgentApp:
         await app.run(task="只做选择题")
     """
 
-    def __init__(self, config: AppConfig | None = None) -> None:
-        self.config = config or load_config()
+    def __init__(
+        self,
+        config: AppConfig | None = None,
+        event_bus: EventBus | None = None,
+        history_store: HistoryStore | None = None,
+    ) -> None:
+        self.config = config or load_config_from_yaml()
+        self._event_bus = event_bus
+        self._history_store = history_store
         self._browser_session = None
+        self._is_paused = False
+        self._is_stopped = False
+        self._current_task: asyncio.Task | None = None
+        self._session_id: int | None = None
 
     # ----------------------------------------------------------
     # 公开方法
@@ -54,12 +66,32 @@ class StudyAgentApp:
         # 1. 验证环境变量
         validate_config(self.config)
 
+        if self._history_store:
+            self._session_id = await self._history_store.create_session(
+                url=self.config.browser.cdp_url,
+                start_time=datetime.now().isoformat(),
+            )
+
+        await self._emit(
+            EventType.TASK_STARTED,
+            {
+                "task": task or self.config.task_description or DEFAULT_TASK_DESCRIPTION,
+                "cdp_url": self.config.browser.cdp_url,
+            },
+        )
+
         # 2. 创建 LLM
         browser_llm, solver_llm = create_llm_pair(self.config)
 
         # 3. 注册 solver 工具
         tools = Tools()
-        register_solver_tool(tools, solver_llm)
+        register_solver_tool(
+            tools,
+            solver_llm,
+            event_bus=self._event_bus,
+            history_store=self._history_store,
+            session_id_getter=lambda: self._session_id,
+        )
         print("🔧 已注册自定义工具：solve_question")
 
         # 4. 浏览器会话
@@ -98,11 +130,38 @@ class StudyAgentApp:
 
             # 8. 结果摘要
             self._print_result(result)
+            await self._emit(
+                EventType.TASK_FINISHED,
+                {
+                    "steps": len(result.history) if result else 0,
+                    "final_result": result.final_result() if result else "",
+                },
+            )
+            if self._history_store and self._session_id is not None:
+                await self._history_store.finish_session(
+                    session_id=self._session_id,
+                    end_time=datetime.now().isoformat(),
+                    status="finished",
+                )
 
         except KeyboardInterrupt:
             print("\n\n⏹️  用户中止，正在清理...")
+            await self._emit(EventType.TASK_STOPPED, {"reason": "keyboard_interrupt"})
+            if self._history_store and self._session_id is not None:
+                await self._history_store.finish_session(
+                    session_id=self._session_id,
+                    end_time=datetime.now().isoformat(),
+                    status="stopped",
+                )
         except Exception as e:
             self._handle_error(e)
+            await self._emit(EventType.TASK_ERROR, {"error": str(e)})
+            if self._history_store and self._session_id is not None:
+                await self._history_store.finish_session(
+                    session_id=self._session_id,
+                    end_time=datetime.now().isoformat(),
+                    status="error",
+                )
             raise
         finally:
             await self.cleanup()
@@ -114,6 +173,24 @@ class StudyAgentApp:
             await self._browser_session.kill()
             self._browser_session = None
             print("👋 已退出。")
+
+    def pause(self) -> None:
+        """暂停任务（软暂停标记）。"""
+        self._is_paused = True
+
+    def resume(self) -> None:
+        """恢复任务。"""
+        self._is_paused = False
+
+    def stop(self) -> None:
+        """停止任务（软停止标记）。"""
+        self._is_stopped = True
+
+    async def _emit(self, event_type: EventType, data: dict | None = None) -> None:
+        """安全发布事件。"""
+        if self._event_bus is None:
+            return
+        await self._event_bus.emit(event_type, data)
 
     # ----------------------------------------------------------
     # 内部方法

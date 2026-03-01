@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}StudyAgent{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <script src="https://unpkg.com/alpinejs@3.14.8/dist/cdn.min.js" defer></script>
+    <link rel="stylesheet" href="/static/css/app.css?v=20260301b">
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen" x-data="{ navStatus: 'idle' }">
+<nav class="border-b border-gray-800 bg-gray-900/90 backdrop-blur sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
+        <div class="flex items-center gap-3">
+            <div class="text-lg font-semibold">StudyAgent</div>
+            <div class="text-sm text-gray-400">自动做题控制台</div>
+        </div>
+        <div class="flex items-center gap-4 text-sm">
+            <a href="/" class="px-3 py-1.5 rounded hover:bg-gray-800">控制台</a>
+            <a href="/settings" class="px-3 py-1.5 rounded hover:bg-gray-800">设置</a>
+            <a href="/review" class="px-3 py-1.5 rounded hover:bg-gray-800">题目回顾</a>
+        </div>
+        <div class="text-xs px-2 py-1 rounded-full border border-gray-700 bg-gray-800" id="global-status">状态：空闲</div>
+    </div>
+</nav>
+<main class="max-w-7xl mx-auto px-4 py-6">
+    {% block content %}{% endblock %}
+</main>
+<script src="/static/js/app.js?v=20260301b"></script>
+</body>
+</html>

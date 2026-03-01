@@ -18,8 +18,18 @@ import sys
 # 将 browser-use 库加入 Python 路径
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "browser-use"))
 
-from study_agent.config import AppConfig, LLMConfig, BrowserConfig, AgentConfig, load_config, validate_config
+from study_agent.config import (
+    AppConfig,
+    LLMConfig,
+    BrowserConfig,
+    AgentConfig,
+    load_config,
+    load_config_from_yaml,
+    save_config_to_yaml,
+    validate_config,
+)
 from study_agent.app import StudyAgentApp, run_app
+from study_agent.event_bus import EventType, event_bus
 
 __all__ = [
     "StudyAgentApp",
@@ -29,5 +39,9 @@ __all__ = [
     "BrowserConfig",
     "AgentConfig",
     "load_config",
+    "load_config_from_yaml",
+    "save_config_to_yaml",
     "validate_config",
+    "EventType",
+    "event_bus",
 ]

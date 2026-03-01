@@ -1,18 +1,26 @@
-"""
-StudyAgent — 基于 browser-use 的自动做题 Agent（双 Agent 架构）
+"""StudyAgent 入口 — 支持 CLI 和 Web UI 两种模式。"""
 
-入口文件。实际逻辑已模块化至 study_agent 包中。
-
-使用前请确保：
-1. Chrome 已以 --remote-debugging-port=9222 参数启动
-2. 已在 .env 中配置好 API Key
-3. 已手动登录目标网站并导航到题目页面
-"""
-
+import argparse
 import asyncio
 
 from study_agent import run_app
 
 
+def main() -> None:
+    """程序入口。"""
+    parser = argparse.ArgumentParser(description="StudyAgent — 自动做题 Agent")
+    parser.add_argument("--web", action="store_true", help="启动 Web UI 模式")
+    parser.add_argument("--host", default="127.0.0.1", help="Web UI 监听地址")
+    parser.add_argument("--port", type=int, default=7860, help="Web UI 端口")
+    args = parser.parse_args()
+
+    if args.web:
+        from study_agent.web.server import start_server
+
+        asyncio.run(start_server(host=args.host, port=args.port))
+    else:
+        asyncio.run(run_app())
+
+
 if __name__ == "__main__":
-    asyncio.run(run_app())
+    main()

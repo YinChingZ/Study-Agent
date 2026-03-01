@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}控制台 - StudyAgent{% endblock %}
+{% block content %}
+<div x-data="dashboard()" class="space-y-4">
+    <section class="bg-gray-800 rounded-lg border border-gray-700 p-4 space-y-3">
+        <h2 class="font-medium text-lg">任务配置</h2>
+        <input x-model="url" type="text" class="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2" placeholder="粘贴题目页面的网址，或留空使用 Chrome 当前页面">
+        <textarea x-model="task" rows="4" class="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2" placeholder="任务描述（可留空使用默认任务）"></textarea>
+        <div class="flex gap-2">
+            <button @click="startTask" class="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded">开始</button>
+            <button @click="pauseTask" class="bg-yellow-600 hover:bg-yellow-500 px-4 py-2 rounded">暂停</button>
+            <button @click="resumeTask" class="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded">恢复</button>
+            <button @click="stopTask" class="bg-red-600 hover:bg-red-500 px-4 py-2 rounded">停止</button>
+        </div>
+    </section>
+
+    <section class="bg-gray-800 rounded-lg border border-gray-700 p-4 space-y-3">
+        <h2 class="font-medium text-lg">实时状态</h2>
+        <div class="w-full bg-gray-700 rounded h-3 overflow-hidden">
+            <div class="bg-blue-500 h-3 transition-all duration-500" :style="`width: ${progressPercent}%`"></div>
+        </div>
+        <div class="text-sm text-gray-300" x-text="`进度：${progress.current}/${progress.total || 0}`"></div>
+        <div class="text-sm" x-text="statusText"></div>
+        <div class="text-sm text-gray-400" x-text="`耗时：${elapsedText}`"></div>
+    </section>
+
+    <section class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div class="bg-gray-800 rounded-lg border border-gray-700 p-4 h-[420px]">
+            <h3 class="font-medium mb-3">页面预览</h3>
+            <template x-if="screenshot">
+                <img :src="`data:image/png;base64,${screenshot}`" class="max-h-[340px] w-full object-contain rounded border border-gray-700">
+            </template>
+            <template x-if="!screenshot">
+                <div class="h-[340px] border border-dashed border-gray-700 rounded flex items-center justify-center text-gray-500">等待任务启动...</div>
+            </template>
+        </div>
+        <div class="bg-gray-800 rounded-lg border border-gray-700 p-4 h-[420px] flex flex-col">
+            <h3 class="font-medium mb-3">日志流</h3>
+            <div class="overflow-y-auto flex-1 space-y-2 pr-2" id="log-scroll">
+                <template x-for="item in logs" :key="item.id">
+                    <div class="text-sm" :class="item.color">
+                        <span class="text-gray-500" x-text="item.time"></span>
+                        <span x-text="item.text"></span>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </section>
+</div>
+{% endblock %}

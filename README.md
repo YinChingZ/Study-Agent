@@ -19,18 +19,57 @@ A general-purpose automated question-answering agent built on [browser-use](http
 - **Visualized Operations**: Demo mode highlights the elements the Agent is interacting with.
 - **Modular Architecture**: Clean package structure, supports programmatic invocation and custom extensions.
 
+## 🆕 Session Updates (Web UI)
+
+- Added **FastAPI Web UI mode** with dashboard, settings, review, and websocket live events.
+- Added **YAML-first config** (`config.yaml`) with environment-variable fallback.
+- Added **Chrome auto-launch + CDP validation** with clearer startup diagnostics.
+- Added **task history persistence** via SQLite (`sessions` + `questions`).
+- Added **login-wait flow**: input URL → open page → wait for manual login → click Resume.
+- Added **dashboard state persistence** (logs/progress/screenshot/input cache) when switching pages.
+- Added **separate Browser Agent / Solver Agent settings** and safer API key save behavior.
+
+## 🧭 Modes
+
+### CLI Mode (unchanged)
+
+```bash
+python main.py
+```
+
+### Web UI Mode
+
+```bash
+python main.py --web
+# optional
+python main.py --web --host 127.0.0.1 --port 7860
+```
+
+Then open `http://127.0.0.1:7860`.
+
 ## 📁 Project Structure
 
 ```
 Study-Agent/
-├── main.py                    # Entry point (thin wrapper)
+├── main.py                    # Entry (CLI / Web)
+├── config.example.yaml        # Demo config template
 ├── study_agent/               # Core package
 │   ├── __init__.py            # Public API exports
 │   ├── config.py              # Configuration dataclasses & env loading
 │   ├── prompts.py             # All prompt templates
 │   ├── llm_factory.py         # LLM factory (OpenAI / Anthropic / Google)
 │   ├── browser.py             # BrowserSession creation & management
+│   ├── event_bus.py           # Runtime event bus
+│   ├── chrome_manager.py      # Chrome detect / launch / CDP probe
 │   ├── app.py                 # StudyAgentApp — main orchestrator
+│   ├── store/
+│   │   └── history.py         # SQLite history store
+│   ├── web/
+│   │   ├── server.py          # FastAPI app entry
+│   │   ├── api/               # config/task/review APIs
+│   │   ├── ws/                # websocket event endpoint
+│   │   ├── templates/         # Jinja2 pages
+│   │   └── static/            # css/js
 │   └── tools/
 │       ├── __init__.py
 │       └── solver.py          # solve_question tool & answer parsing
@@ -86,6 +125,14 @@ BROWSER_MODEL=gpt-4o-mini
 SOLVER_PROVIDER=google
 SOLVER_MODEL=gemini-2.0-flash
 ```
+
+Or use YAML config for Web UI:
+
+```bash
+cp config.example.yaml config.yaml
+```
+
+`config.yaml` is intentionally git-ignored. Use `config.example.yaml` for sharing.
 
 ### 3. Start Chrome in Debug Mode
 

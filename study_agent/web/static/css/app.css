@@ -1,0 +1,26 @@
+* {
+    scrollbar-width: thin;
+    scrollbar-color: #4b5563 #111827;
+}
+
+*::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+    background: #111827;
+}
+
+*::-webkit-scrollbar-thumb {
+    background-color: #4b5563;
+    border-radius: 9999px;
+}
+
+#log-scroll {
+    scroll-behavior: smooth;
+}
+
+.progress-animated {
+    transition: width 0.5s ease;
+}
