@@ -15,6 +15,10 @@ from typing import Any, Awaitable, Callable
 logger = logging.getLogger("study_agent.web")
 
 
+# Web UI canonical task statuses.
+TASK_STATUSES = ("idle", "running", "paused", "stopped", "finished", "error")
+
+
 class EventType(str, Enum):
     """事件类型枚举。"""
 

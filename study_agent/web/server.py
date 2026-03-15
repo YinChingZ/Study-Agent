@@ -27,6 +27,8 @@ async def lifespan(app: FastAPI):
     app.state.agent_task = None
     app.state.chrome_manager = None
     app.state.pending_task_payload = None
+    app.state.task_status = "idle"
+    app.state.current_task_url = None
     yield
     if app.state.agent_app:
         await app.state.agent_app.cleanup()

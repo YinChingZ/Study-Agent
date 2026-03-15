@@ -42,14 +42,18 @@ class StudyAgentApp:
         config: AppConfig | None = None,
         event_bus: EventBus | None = None,
         history_store: HistoryStore | None = None,
+        task_url: str | None = None,
     ) -> None:
         self.config = config or load_config_from_yaml()
         self._event_bus = event_bus
         self._history_store = history_store
         self._browser_session = None
+        self._agent: Agent | None = None
         self._is_paused = False
         self._is_stopped = False
-        self._current_task: asyncio.Task | None = None
+        self._status: str = "idle"
+        self._status_detail: str | None = None
+        self._task_url = task_url
         self._session_id: int | None = None
 
     # ----------------------------------------------------------
@@ -62,21 +66,26 @@ class StudyAgentApp:
             task: 自定义任务描述。为 None 时使用默认任务描述或 config 中的 task_description。
         """
         self._print_banner()
+        self._is_stopped = False
 
         # 1. 验证环境变量
         validate_config(self.config)
 
         if self._history_store:
             self._session_id = await self._history_store.create_session(
-                url=self.config.browser.cdp_url,
+                task_url=self._task_url,
+                cdp_url=self.config.browser.cdp_url,
                 start_time=datetime.now().isoformat(),
             )
 
+        self._status = "running"
+        self._status_detail = None
         await self._emit(
             EventType.TASK_STARTED,
             {
                 "task": task or self.config.task_description or DEFAULT_TASK_DESCRIPTION,
                 "cdp_url": self.config.browser.cdp_url,
+                "task_url": self._task_url,
             },
         )
 
@@ -103,7 +112,7 @@ class StudyAgentApp:
         try:
             # 6. 创建 Browser Agent
             ac = self.config.agent
-            agent = Agent(
+            self._agent = Agent(
                 task=task_text,
                 llm=browser_llm,
                 tools=tools,
@@ -117,7 +126,28 @@ class StudyAgentApp:
                 use_judge=ac.use_judge,
                 extend_system_message=BROWSER_AGENT_PROMPT,
                 demo_mode=ac.demo_mode,
+                register_should_stop_callback=self._should_stop,
             )
+
+            if self._is_paused:
+                self._agent.pause()
+
+            await self._emit(
+                EventType.PROGRESS,
+                {
+                    "current": 0,
+                    "total": ac.max_steps,
+                },
+            )
+
+            async def _on_step_end(agent_instance: Agent) -> None:
+                await self._emit(
+                    EventType.PROGRESS,
+                    {
+                        "current": min(agent_instance.state.n_steps, ac.max_steps),
+                        "total": ac.max_steps,
+                    },
+                )
 
             print()
             print("🚀 Agent 开始做题...")
@@ -126,26 +156,48 @@ class StudyAgentApp:
             print()
 
             # 7. 运行
-            result = await agent.run()
+            result = await self._agent.run(max_steps=ac.max_steps, on_step_end=_on_step_end)
 
             # 8. 结果摘要
             self._print_result(result)
-            await self._emit(
-                EventType.TASK_FINISHED,
-                {
-                    "steps": len(result.history) if result else 0,
-                    "final_result": result.final_result() if result else "",
-                },
-            )
-            if self._history_store and self._session_id is not None:
-                await self._history_store.finish_session(
-                    session_id=self._session_id,
-                    end_time=datetime.now().isoformat(),
-                    status="finished",
+            if self._is_stopped:
+                self._status = "stopped"
+                self._status_detail = "stop_requested"
+                await self._emit(EventType.TASK_STOPPED, {"reason": "stop_requested"})
+                if self._history_store and self._session_id is not None:
+                    await self._history_store.finish_session(
+                        session_id=self._session_id,
+                        end_time=datetime.now().isoformat(),
+                        status="stopped",
+                    )
+            else:
+                self._status = "finished"
+                self._status_detail = None
+                await self._emit(
+                    EventType.TASK_FINISHED,
+                    {
+                        "steps": len(result.history) if result else 0,
+                        "final_result": result.final_result() if result else "",
+                    },
                 )
+                await self._emit(
+                    EventType.PROGRESS,
+                    {
+                        "current": ac.max_steps,
+                        "total": ac.max_steps,
+                    },
+                )
+                if self._history_store and self._session_id is not None:
+                    await self._history_store.finish_session(
+                        session_id=self._session_id,
+                        end_time=datetime.now().isoformat(),
+                        status="finished",
+                    )
 
         except KeyboardInterrupt:
             print("\n\n⏹️  用户中止，正在清理...")
+            self._status = "stopped"
+            self._status_detail = "keyboard_interrupt"
             await self._emit(EventType.TASK_STOPPED, {"reason": "keyboard_interrupt"})
             if self._history_store and self._session_id is not None:
                 await self._history_store.finish_session(
@@ -154,6 +206,20 @@ class StudyAgentApp:
                     status="stopped",
                 )
         except Exception as e:
+            if self._is_stopped:
+                self._status = "stopped"
+                self._status_detail = "stop_requested"
+                await self._emit(EventType.TASK_STOPPED, {"reason": "stop_requested"})
+                if self._history_store and self._session_id is not None:
+                    await self._history_store.finish_session(
+                        session_id=self._session_id,
+                        end_time=datetime.now().isoformat(),
+                        status="stopped",
+                    )
+                return
+
+            self._status = "error"
+            self._status_detail = str(e)
             self._handle_error(e)
             await self._emit(EventType.TASK_ERROR, {"error": str(e)})
             if self._history_store and self._session_id is not None:
@@ -164,6 +230,7 @@ class StudyAgentApp:
                 )
             raise
         finally:
+            self._agent = None
             await self.cleanup()
 
     async def cleanup(self) -> None:
@@ -175,16 +242,41 @@ class StudyAgentApp:
             print("👋 已退出。")
 
     def pause(self) -> None:
-        """暂停任务（软暂停标记）。"""
+        """暂停任务。"""
         self._is_paused = True
+        self._status = "paused"
+        self._status_detail = None
+        if self._agent:
+            self._agent.pause()
 
     def resume(self) -> None:
         """恢复任务。"""
         self._is_paused = False
+        self._status = "running"
+        self._status_detail = None
+        if self._agent:
+            self._agent.resume()
 
     def stop(self) -> None:
-        """停止任务（软停止标记）。"""
+        """停止任务。"""
         self._is_stopped = True
+        self._is_paused = False
+        self._status = "stopped"
+        self._status_detail = "stop_requested"
+        if self._agent:
+            self._agent.stop()
+
+    def get_status(self) -> str:
+        """返回统一任务状态。"""
+        return self._status
+
+    def get_status_detail(self) -> str | None:
+        """返回状态细节（调试用途）。"""
+        return self._status_detail
+
+    async def _should_stop(self) -> bool:
+        """提供给底层 Agent 的停止检查点。"""
+        return self._is_stopped
 
     async def _emit(self, event_type: EventType, data: dict | None = None) -> None:
         """安全发布事件。"""

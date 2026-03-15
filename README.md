@@ -47,6 +47,64 @@ python main.py --web --host 127.0.0.1 --port 7860
 
 Then open `http://127.0.0.1:7860`.
 
+## 📡 Status and Event Contract (Web UI)
+
+### Task Status (`/api/task/status`)
+
+- `idle`: no active task
+- `running`: task is executing
+- `paused`: task is paused (including login-wait)
+- `stopped`: task was stopped (manual stop/interruption)
+- `finished`: task completed normally
+- `error`: task exited with error
+
+### WebSocket Events (`/ws`)
+
+- `task_started`: task started, fields: `task`, `cdp_url`, `task_url`
+- `task_paused`: task paused, optional fields: `reason`, `url`
+- `task_resumed`: task resumed, optional field: `reason`
+- `task_stopped`: task stopped, optional field: `reason`
+- `task_finished`: task finished, fields: `steps`, `final_result`
+- `task_error`: task error, field: `error`
+- `progress`: step progress, fields: `current`, `total`
+- `question_found`: question detected, fields: `question`, `type`
+- `solver_calling`: solver started reasoning
+- `solver_answered`: solver returned answer, fields: `answer`, `reasoning`
+- `screenshot`: on-demand screenshot, field: `image` (base64)
+- `log`: log message, field: `message`
+
+Note: UI status should be sourced from the status API. WebSocket events are used for real-time rendering and logs.
+
+## 🛠️ Session Fix Summary (2026-03)
+
+### Task Control and State Consistency
+
+- Unified task status source: `idle/running/paused/stopped/finished/error` is now maintained by backend runtime state.
+- Wired `pause/resume/stop` to real `browser-use.Agent` controls and stop checkpoints (`register_should_stop_callback`).
+- Added frontend handling for `task_stopped` and status re-sync after WebSocket reconnect.
+- Repeated Start clicks during running now return a friendly "already running" flow instead of a false failure.
+
+### Progress and UI Semantics
+
+- Backend now emits real step progress: `0/total` on start, `current/total` on each step, and final progress on completion.
+- Dashboard copy now explicitly shows "step progress" to match event semantics.
+- Preview panel renamed to on-demand question screenshot semantics to avoid false blank-screen expectations.
+
+### History and Review Performance
+
+- Session storage now separates `task_url` and `cdp_url`; review page shows the real task URL.
+- Added DB index on `questions(session_id)` to speed up per-session question queries.
+- History list API now supports `limit` + `offset` pagination.
+- Session detail excludes screenshot payload by default; screenshot retrieval moved to a dedicated endpoint.
+- Review page uses lazy screenshot loading and skips cache for running sessions.
+- Added error handling on review fetch calls and localized datetime rendering in session list.
+
+### Frontend Runtime Persistence Cleanup
+
+- Runtime fields (logs, screenshot, elapsed time) are restored only for `running/paused` sessions.
+- Runtime view state is cleared when status synchronizes to `idle` to prevent stale logs/timers.
+- Static asset versioning was bumped to ensure browsers load the latest frontend code.
+
 ## 📁 Project Structure
 
 ```

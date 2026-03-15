@@ -48,6 +48,64 @@ python main.py --web --host 127.0.0.1 --port 7860
 
 浏览器访问 `http://127.0.0.1:7860`。
 
+## 📡 状态与事件契约（Web UI）
+
+### 任务状态（`/api/task/status`）
+
+- `idle`：当前无任务
+- `running`：任务执行中
+- `paused`：任务暂停（含等待登录）
+- `stopped`：任务已停止（手动停止/中断）
+- `finished`：任务正常完成
+- `error`：任务异常退出
+
+### WebSocket 事件（`/ws`）
+
+- `task_started`：开始执行，数据：`task`, `cdp_url`, `task_url`
+- `task_paused`：任务暂停，数据可含 `reason`, `url`
+- `task_resumed`：任务恢复，数据可含 `reason`
+- `task_stopped`：任务停止，数据可含 `reason`
+- `task_finished`：任务完成，数据：`steps`, `final_result`
+- `task_error`：任务异常，数据：`error`
+- `progress`：步骤进度，数据：`current`, `total`
+- `question_found`：发现题目，数据：`question`, `type`
+- `solver_calling`：Solver 开始推理
+- `solver_answered`：Solver 返回答案，数据：`answer`, `reasoning`
+- `screenshot`：按需截图，数据：`image`（base64）
+- `log`：日志文本，数据：`message`
+
+说明：前端展示状态以 `status` 接口为准，WebSocket 事件用于实时刷新 UI 与日志。
+
+## 🛠️ 本次修复汇总（2026-03）
+
+### 任务控制与状态一致性
+
+- 统一任务状态机来源：`idle/running/paused/stopped/finished/error` 由后端统一维护，避免停止后回跳 `finished`。
+- `pause/resume/stop` 已接入 `browser-use.Agent` 的真实控制链路与停止检查点（`register_should_stop_callback`）。
+- 前端补齐 `task_stopped` 事件处理，并在 WebSocket 重连后主动同步状态。
+- 运行中重复点击“开始”时，前端改为提示“任务已在运行”，不再误报启动失败。
+
+### 进度与界面语义
+
+- 后端新增真实步骤进度事件：启动发 `0/total`、每步更新 `current/total`、结束补最终进度。
+- 控制台进度文案改为“步骤进度”，与后端含义一致。
+- 预览区改为“题目截图（按需）”，避免把无截图场景误判为故障。
+
+### 历史记录与回顾页性能
+
+- 会话记录拆分 `task_url` 与 `cdp_url` 字段，回顾页展示真实任务地址。
+- 为 `questions(session_id)` 增加索引，优化按会话查询题目性能。
+- 历史列表 API 支持 `limit` + `offset` 分页参数。
+- 会话详情默认不返回截图内容；新增按题目 ID 拉取截图的独立接口。
+- 回顾页截图改为按需懒加载，运行中会话不走缓存，减少大数据量传输。
+- 回顾页请求增加错误处理，时间显示改为本地格式化。
+
+### 前端状态持久化治理
+
+- 仅在 `running/paused` 时恢复日志、截图、耗时等运行态数据。
+- 状态同步到 `idle` 时自动清空运行态展示，避免旧日志与旧时长残留。
+- 升级静态资源版本参数，确保浏览器拉取最新前端脚本。
+
 ## 📁 项目结构
 
 ```

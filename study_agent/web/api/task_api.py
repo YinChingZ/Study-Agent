@@ -15,7 +15,7 @@ from study_agent import StudyAgentApp
 from study_agent.chrome_manager import ChromeManager
 from study_agent.config import AppConfig
 from study_agent.config import load_config_from_yaml
-from study_agent.event_bus import EventType, event_bus
+from study_agent.event_bus import EventType, TASK_STATUSES, event_bus
 from study_agent.prompts import DEFAULT_TASK_DESCRIPTION
 
 logger = logging.getLogger("study_agent.web")
@@ -27,17 +27,44 @@ class StartTaskRequest(BaseModel):
     task_description: str | None = None
 
 
+VALID_TASK_STATUSES = set(TASK_STATUSES)
+
+
+def _set_task_status(request: Request, status: str) -> None:
+    if status not in VALID_TASK_STATUSES:
+        status = "error"
+    request.app.state.task_status = status
+
+
+def _get_task_status(request: Request) -> str:
+    status = getattr(request.app.state, "task_status", "idle")
+    if status not in VALID_TASK_STATUSES:
+        return "error"
+    return status
+
+
 async def _launch_agent_task(request: Request, config: AppConfig, task_text: str) -> None:
     """创建并后台运行 Agent。"""
     store = request.app.state.history_store
-    agent_app = StudyAgentApp(config=config, event_bus=event_bus, history_store=store)
+    task_url = getattr(request.app.state, "current_task_url", None)
+    agent_app = StudyAgentApp(config=config, event_bus=event_bus, history_store=store, task_url=task_url)
     request.app.state.agent_app = agent_app
+    _set_task_status(request, "running")
 
     async def _runner() -> None:
         try:
             await agent_app.run(task=task_text)
+            _set_task_status(request, agent_app.get_status())
+        except asyncio.CancelledError:
+            _set_task_status(request, "stopped")
+            await event_bus.emit(EventType.TASK_STOPPED, {"reason": "cancelled"})
+            raise
         except Exception as exc:
+            _set_task_status(request, "error")
             await event_bus.emit(EventType.TASK_ERROR, {"error": str(exc)})
+        finally:
+            if _get_task_status(request) == "running":
+                _set_task_status(request, agent_app.get_status())
 
     request.app.state.agent_task = asyncio.create_task(_runner())
 
@@ -60,6 +87,7 @@ def _open_url_for_login(cdp_url: str, target_url: str) -> bool:
 @router.post("/api/task/start")
 async def start_task(request: Request, body: StartTaskRequest) -> dict:
     """创建并启动任务。"""
+    request.app.state.current_task_url = body.url or None
     current_task = getattr(request.app.state, "agent_task", None)
     if current_task and not current_task.done():
         return {"status": "running", "message": "已有任务在运行"}
@@ -75,6 +103,7 @@ async def start_task(request: Request, body: StartTaskRequest) -> dict:
             request.app.state.chrome_manager = chrome_manager
         except Exception as exc:
             error_text = f"Chrome 调试连接失败：{exc}"
+            _set_task_status(request, "error")
             await event_bus.emit(EventType.TASK_ERROR, {"error": error_text})
             return {"status": "error", "message": error_text}
 
@@ -88,11 +117,13 @@ async def start_task(request: Request, body: StartTaskRequest) -> dict:
     if body.url:
         opened_by_cdp = _open_url_for_login(config.browser.cdp_url, body.url)
         request.app.state.agent_task = None
+        request.app.state.agent_app = None
         request.app.state.pending_task_payload = {
             "config": config,
             "task_text": task_text,
             "url": body.url,
         }
+        _set_task_status(request, "paused")
         await event_bus.emit(
             EventType.TASK_PAUSED,
             {
@@ -117,6 +148,7 @@ async def start_task(request: Request, body: StartTaskRequest) -> dict:
         }
 
     await _launch_agent_task(request, config, task_text)
+    _set_task_status(request, "running")
     return {"status": "started", "waiting_login": False}
 
 
@@ -124,9 +156,11 @@ async def start_task(request: Request, body: StartTaskRequest) -> dict:
 async def pause_task(request: Request) -> dict:
     """暂停当前任务。"""
     agent_app: StudyAgentApp | None = request.app.state.agent_app
-    if not agent_app:
+    task: asyncio.Task | None = request.app.state.agent_task
+    if not agent_app or not task or task.done():
         return {"status": "idle", "message": "当前没有运行中的任务"}
     agent_app.pause()
+    _set_task_status(request, "paused")
     await event_bus.emit(EventType.TASK_PAUSED, {})
     return {"status": "paused"}
 
@@ -137,6 +171,8 @@ async def resume_task(request: Request) -> dict:
     pending = getattr(request.app.state, "pending_task_payload", None)
     if pending:
         request.app.state.pending_task_payload = None
+        request.app.state.current_task_url = pending.get("url")
+        _set_task_status(request, "running")
         await event_bus.emit(EventType.TASK_RESUMED, {"reason": "user_login_completed"})
         await _launch_agent_task(
             request,
@@ -149,6 +185,7 @@ async def resume_task(request: Request) -> dict:
     if not agent_app:
         return {"status": "idle", "message": "没有可恢复的任务，请先点击“开始”"}
     agent_app.resume()
+    _set_task_status(request, "running")
     await event_bus.emit(EventType.TASK_RESUMED, {})
     return {"status": "running"}
 
@@ -161,33 +198,34 @@ async def stop_task(request: Request) -> dict:
 
     if pending:
         request.app.state.pending_task_payload = None
+        _set_task_status(request, "stopped")
         await event_bus.emit(EventType.TASK_STOPPED, {"reason": "cancel_waiting_login"})
         return {"status": "stopped"}
 
-    if not agent_app:
+    task: asyncio.Task | None = request.app.state.agent_task
+    if not agent_app or not task or task.done():
+        if _get_task_status(request) == "stopped":
+            return {"status": "stopped", "message": "任务已停止"}
         return {"status": "idle", "message": "当前没有运行中的任务"}
 
     agent_app.stop()
-    task: asyncio.Task | None = request.app.state.agent_task
-    if task and not task.done():
-        task.cancel()
-
-    await event_bus.emit(EventType.TASK_STOPPED, {})
+    _set_task_status(request, "stopped")
+    await event_bus.emit(EventType.TASK_STOPPED, {"reason": "api_stop"})
     return {"status": "stopped"}
 
 
 @router.get("/api/task/status")
 async def task_status(request: Request) -> dict:
     """获取任务状态。"""
-    task: asyncio.Task | None = request.app.state.agent_task
     pending = getattr(request.app.state, "pending_task_payload", None)
-    status: str
+    status = _get_task_status(request)
+
     if pending:
         status = "paused"
-    elif task is None:
-        status = "idle"
-    elif task.done():
-        status = "finished"
-    else:
-        status = "running"
+
+    agent_app: StudyAgentApp | None = request.app.state.agent_app
+    task: asyncio.Task | None = request.app.state.agent_task
+    if agent_app and task and not task.done():
+        status = agent_app.get_status()
+
     return {"status": status, "waiting_login": bool(pending)}

@@ -19,19 +19,20 @@
         <div class="w-full bg-gray-700 rounded h-3 overflow-hidden">
             <div class="bg-blue-500 h-3 transition-all duration-500" :style="`width: ${progressPercent}%`"></div>
         </div>
-        <div class="text-sm text-gray-300" x-text="`进度：${progress.current}/${progress.total || 0}`"></div>
+        <div class="text-sm text-gray-300" x-text="`步骤进度：${progress.current}/${progress.total || 0}`"></div>
         <div class="text-sm" x-text="statusText"></div>
         <div class="text-sm text-gray-400" x-text="`耗时：${elapsedText}`"></div>
     </section>
 
     <section class="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div class="bg-gray-800 rounded-lg border border-gray-700 p-4 h-[420px]">
-            <h3 class="font-medium mb-3">页面预览</h3>
+            <h3 class="font-medium mb-1">题目截图（按需）</h3>
+            <p class="text-xs text-gray-400 mb-2">仅当题目包含图表/图片且解题时需要视觉信息时才会更新。</p>
             <template x-if="screenshot">
                 <img :src="`data:image/png;base64,${screenshot}`" class="max-h-[340px] w-full object-contain rounded border border-gray-700">
             </template>
             <template x-if="!screenshot">
-                <div class="h-[340px] border border-dashed border-gray-700 rounded flex items-center justify-center text-gray-500">等待任务启动...</div>
+                <div class="h-[340px] border border-dashed border-gray-700 rounded flex items-center justify-center text-gray-500">当前没有按需截图</div>
             </template>
         </div>
         <div class="bg-gray-800 rounded-lg border border-gray-700 p-4 h-[420px] flex flex-col">

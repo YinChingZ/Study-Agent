@@ -11,6 +11,7 @@ class StudyAgentWS {
         this.ws.onopen = () => {
             const statusTag = document.getElementById('global-status');
             if (statusTag) statusTag.textContent = '状态：已连接';
+            window.dispatchEvent(new Event('agentws:open'));
         };
         this.ws.onmessage = (msg) => {
             const event = JSON.parse(msg.data);
@@ -30,7 +31,7 @@ class StudyAgentWS {
 
 window.agentWS = new StudyAgentWS();
 
-const DASHBOARD_STATE_KEY = 'studyagent.dashboard.state.v1';
+const DASHBOARD_STATE_KEY = 'studyagent.dashboard.state.v2';
 
 window.dashboard = function () {
     return {
@@ -47,10 +48,29 @@ window.dashboard = function () {
         init() {
             this.loadPersistedState();
             window.agentWS.onEvent((event) => this.handleWSMessage(event));
+            window.addEventListener('agentws:open', () => this.syncStatus());
             this.syncStatus();
             window.addEventListener('beforeunload', () => this.persistState());
             this.$watch('url', () => this.persistState());
             this.$watch('task', () => this.persistState());
+        },
+
+        setStatus(nextStatus) {
+            this.status = nextStatus;
+            if (nextStatus === 'running') {
+                this.startTimer();
+            } else {
+                this.stopTimer();
+            }
+        },
+
+        resetRuntimeState() {
+            this.progress = { current: 0, total: 0 };
+            this.logs = [];
+            this.screenshot = null;
+            this.elapsed = 0;
+            this.startedAt = null;
+            this.stopTimer();
         },
 
         compactLogsForStorage() {
@@ -68,16 +88,20 @@ window.dashboard = function () {
                 if (!raw) return;
                 const saved = JSON.parse(raw);
                 this.status = saved.status || this.status;
-                this.progress = saved.progress || this.progress;
-                this.logs = Array.isArray(saved.logs) ? saved.logs.slice(-200) : this.logs;
-                this.screenshot = saved.screenshot || null;
                 this.url = saved.url || '';
                 this.task = saved.task || '';
-                this.startedAt = saved.startedAt || null;
-                if (typeof saved.elapsed === 'number') {
-                    this.elapsed = Math.max(0, Math.floor(saved.elapsed));
+
+                // 仅在任务仍在进行时恢复运行期数据，避免旧日志和旧计时长期残留。
+                if (this.status === 'running' || this.status === 'paused') {
+                    this.progress = saved.progress || this.progress;
+                    this.logs = Array.isArray(saved.logs) ? saved.logs.slice(-200) : this.logs;
+                    this.screenshot = saved.screenshot || null;
+                    this.startedAt = saved.startedAt || null;
+                    if (typeof saved.elapsed === 'number') {
+                        this.elapsed = Math.max(0, Math.floor(saved.elapsed));
+                    }
                 }
-                if (this.status === 'running') {
+                if (this.status === 'running' && this.startedAt) {
                     this.startTimer();
                 }
             } catch {
@@ -127,12 +151,16 @@ window.dashboard = function () {
         async syncStatus() {
             const res = await fetch('/api/task/status');
             const data = await res.json();
-            this.status = data.status || 'idle';
+            const prevStatus = this.status;
+            this.setStatus(data.status || 'idle');
+
+            // 后端已无活动任务时，主动清理运行期展示，避免历史残留误导。
+            if (this.status === 'idle' && prevStatus !== 'running' && !data.waiting_login) {
+                this.resetRuntimeState();
+            }
+
             if (data.waiting_login) {
                 this.addLog('已打开任务页面，请先登录后点击“恢复”', 'text-yellow-400');
-            }
-            if (this.status === 'running') {
-                this.startTimer();
             }
             this.persistState();
         },
@@ -185,14 +213,16 @@ window.dashboard = function () {
             });
             const data = await res.json();
             if (data.status === 'started') {
-                this.status = 'running';
-                this.elapsed = 0;
+                this.resetRuntimeState();
+                this.setStatus('running');
                 this.startedAt = Date.now();
-                this.stopTimer();
                 this.startTimer();
                 this.addLog('任务已启动', 'text-blue-400');
+            } else if (data.status === 'running') {
+                this.setStatus('running');
+                this.addLog(data.message || '任务已在运行', 'text-blue-300');
             } else if (data.status === 'paused' && data.waiting_login) {
-                this.status = 'paused';
+                this.setStatus('paused');
                 this.addLog(data.message || '等待登录中，请点击“恢复”', 'text-yellow-400');
             } else {
                 this.addLog(data.message || '启动失败', 'text-red-400');
@@ -203,17 +233,16 @@ window.dashboard = function () {
         async pauseTask() {
             const res = await fetch('/api/task/pause', { method: 'POST' });
             const data = await res.json();
-            this.status = data.status || 'paused';
-            this.addLog('任务已暂停', 'text-yellow-400');
+            this.setStatus(data.status || 'paused');
+            this.addLog(data.message || '任务已暂停', 'text-yellow-400');
             this.persistState();
         },
 
         async resumeTask() {
             const res = await fetch('/api/task/resume', { method: 'POST' });
             const data = await res.json();
-            this.status = data.status || 'running';
+            this.setStatus(data.status || 'running');
             if (this.status === 'running') {
-                this.startTimer();
                 this.addLog(data.message || '任务已恢复', 'text-emerald-400');
             } else {
                 this.addLog(data.message || '恢复失败', 'text-red-400');
@@ -224,8 +253,7 @@ window.dashboard = function () {
         async stopTask() {
             const res = await fetch('/api/task/stop', { method: 'POST' });
             const data = await res.json();
-            this.status = data.status || 'stopped';
-            this.stopTimer();
+            this.setStatus(data.status || 'stopped');
             this.addLog('任务已停止', 'text-red-400');
             this.persistState();
         },
@@ -235,26 +263,25 @@ window.dashboard = function () {
             const data = event.data || {};
 
             if (type === 'task_started') {
-                this.status = 'running';
+                this.setStatus('running');
                 if (!this.startedAt) {
                     this.startedAt = Date.now();
                 }
-                this.startTimer();
                 this.addLog('任务开始执行', 'text-blue-400');
             } else if (type === 'task_paused') {
-                this.status = 'paused';
+                this.setStatus('paused');
                 this.addLog('任务已暂停，等待你登录后点击“恢复”', 'text-yellow-400');
             } else if (type === 'task_resumed') {
-                this.status = 'running';
-                this.startTimer();
+                this.setStatus('running');
                 this.addLog('任务恢复执行', 'text-emerald-400');
+            } else if (type === 'task_stopped') {
+                this.setStatus('stopped');
+                this.addLog('任务已停止', 'text-red-400');
             } else if (type === 'task_finished') {
-                this.status = 'finished';
-                this.stopTimer();
+                this.setStatus('finished');
                 this.addLog('任务完成', 'text-green-400');
             } else if (type === 'task_error') {
-                this.status = 'error';
-                this.stopTimer();
+                this.setStatus('error');
                 this.addLog(`任务错误：${data.error || ''}`, 'text-red-400');
             } else if (type === 'question_found') {
                 this.addLog(`发现题目：${data.question || ''}`, 'text-blue-300');
@@ -371,9 +398,14 @@ window.reviewPage = function () {
         openSessionId: null,
 
         async loadSessions() {
-            const res = await fetch('/api/history');
-            const data = await res.json();
-            this.sessions = data.items || [];
+            try {
+                const res = await fetch('/api/history');
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                this.sessions = data.items || [];
+            } catch (e) {
+                console.error('加载历史会话失败', e);
+            }
         },
 
         async toggleSession(sessionId) {
@@ -381,11 +413,40 @@ window.reviewPage = function () {
                 this.openSessionId = null;
                 return;
             }
-            if (!this.details[sessionId]) {
+            const session = this.sessions.find(s => s.id === sessionId);
+            const isRunning = session && session.status === 'running';
+            if (!this.details[sessionId] || isRunning) {
                 const res = await fetch(`/api/history/${sessionId}`);
-                this.details[sessionId] = await res.json();
+                if (!res.ok) {
+                    console.error('加载会话详情失败', res.status);
+                    return;
+                }
+                const detail = await res.json();
+                detail.questions = (detail.questions || []).map((q) => ({
+                    ...q,
+                    has_screenshot: Boolean(q.has_screenshot),
+                    _screenshotLoaded: false,
+                    _screenshotSrc: '',
+                }));
+                this.details[sessionId] = detail;
             }
             this.openSessionId = sessionId;
+        },
+
+        async loadScreenshot(q) {
+            if (q._screenshotLoaded) return;
+            try {
+                const res = await fetch(`/api/history/questions/${q.id}/screenshot`);
+                if (!res.ok) {
+                    q.has_screenshot = false;
+                    return;
+                }
+                const data = await res.json();
+                q._screenshotSrc = `data:image/png;base64,${data.screenshot_b64}`;
+                q._screenshotLoaded = true;
+            } catch (e) {
+                console.error('加载截图失败', e);
+            }
         },
     };
 };
