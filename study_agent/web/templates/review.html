@@ -9,8 +9,8 @@
                 <div class="border border-gray-700 rounded p-3">
                     <div class="flex items-center justify-between gap-2">
                         <div class="text-sm">
-                            <div x-text="`#${session.id} ${session.start_time}`"></div>
-                            <div class="text-gray-400" x-text="session.url || '无 URL' "></div>
+                            <div x-text="`#${session.id} ${new Date(session.start_time).toLocaleString()}`"></div>
+                            <div class="text-gray-400" x-text="session.task_url || '无任务 URL'"></div>
                         </div>
                         <button @click="toggleSession(session.id)" class="text-sm bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded">查看详情</button>
                     </div>
@@ -22,8 +22,15 @@
                                 <div class="mt-2 text-sm space-y-2">
                                     <div><span class="text-gray-400">答案：</span><span x-text="q.answer"></span></div>
                                     <div><span class="text-gray-400">推理：</span><span x-text="q.reasoning"></span></div>
-                                    <template x-if="q.screenshot_b64">
-                                        <img :src="`data:image/png;base64,${q.screenshot_b64}`" class="max-h-48 object-contain border border-gray-700 rounded">
+                                    <template x-if="q.has_screenshot">
+                                        <div>
+                                            <button @click="loadScreenshot(q)" x-show="!q._screenshotLoaded"
+                                                class="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">
+                                                加载截图
+                                            </button>
+                                            <img x-show="q._screenshotLoaded" :src="q._screenshotSrc"
+                                                class="max-h-48 object-contain border border-gray-700 rounded">
+                                        </div>
                                     </template>
                                 </div>
                             </details>
